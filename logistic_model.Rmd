@@ -95,3 +95,48 @@ write.csv(output, "logistic_model.csv", row.names=FALSE)
 # Result
 
 This scores 0.76077 which, as we expect, is a little worse than it performs on the training set. This is a significant improvement over the trivial solution where we predict no survivors, which scores 0.62679.
+
+# Adding fare data
+
+We expect fare data to have a nonlinear relationship with survival probability, so let's see if we can find a threshold score above which survival is most likely. We can do this using a ROC curve for fare vs. survival.
+
+```{r message=FALSE}
+library(pROC)
+roc1 = roc(Survived ~ Fare, train,
+           plot=TRUE, auc.polygon=TRUE, max.auc.polygon=TRUE, grid=TRUE,
+           print.auc=TRUE, show.thres=TRUE, print.thres="best")
+```
+
+So let's add that to our model and try again.
+
+```{r}
+train_logit$Expensive = train_logit$Fare > 10.825
+train.model = glm(Survived ~ Sex + BadCabin + BadEmbarkation + Expensive, data=train_logit, family="binomial")
+print(summary(train.model))
+print(sum((predict(train.model) > 0) == (train_logit$Survived == "Yes")) / length(train_logit$Survived))
+```
+
+It looks like this gives us only marginal improvement over our prior model, but let's run it through the leaderboard anyway.
+
+```{r}
+test_logit$Fare[is.na(test_logit$Fare)] = median(test_logit$Fare, na.rm=TRUE)
+test_logit$Expensive = test_logit$Fare > 10.825
+test$Survived = predict(train.model, test_logit) > 0
+output = data.frame(PassengerId=test$PassengerId, Survived=as.numeric(test$Survived))
+write.csv(output, "logistic_model_fare.csv", row.names=FALSE)
+```
+
+This analysis makes us a little more pessimistic about the fate of two of our passengers:
+```
+tim@rocketman:titanic (master *)$ diff -U0 logistic_model.csv logistic_model_fare.csv 
+--- logistic_model.csv	2015-07-11 12:31:53.000000000 -0700
++++ logistic_model_fare.csv	2015-07-11 13:03:57.000000000 -0700
+@@ -290 +290 @@
+-1180,1
++1180,0
+@@ -323 +323 @@
+-1213,1
++1213,0
+```
+
+and actually scores worse than our simpler model, with a score of 0.75598. I think this is likely because the effect of fare was already encompassed by the effect of cabin and class.
