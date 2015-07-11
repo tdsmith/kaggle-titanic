@@ -1,0 +1,97 @@
+---
+title: "Simple logistic regression model"
+author: "Tim D. Smith"
+date: "July 11, 2015"
+output: html_document
+---
+
+# Exploring the Titanic data set
+
+Start by loading some libraries and loading the training data:
+```{r message=FALSE}
+library(dplyr)
+library(ggplot2)
+library(GGally)
+train = read.csv("train.csv")
+```
+
+Let's plot the structured columns against each other and see what we learn:
+```{r warning=FALSE,message=FALSE,fig.width=10,fig.height=10}
+skipcols = c("Cabin", "Ticket", "Name", "PassengerId")
+train$CabinLetter = as.factor(gsub("^([A-Z]).*", "\\1", train$Cabin))
+train$Survived = factor(train$Survived, levels=c(0,1), labels=c("No", "Yes"))
+train$Pclass = as.factor(train$Pclass)
+train_to_plot = train[,!names(train) %in% skipcols]
+print(ggpairs(train_to_plot) + theme_bw())
+```
+
+There's a lot going on here but we can extract some observations:
+
+* Most passengers did not survive.
+* The absolute number of survivors from each class is about the same, but there are many more nonsurvivors from passenger class 3.
+* Women survived at a much higher rate.
+* Age is not strongly linked to survival.
+* Siblings & spouses are not linked to survival.
+* More survivors had at least one parent or child than non-survivors, so there's some protective effect.
+* More survivors paid a higher fare than not.
+* Passengers embarking at Southhampton were less likely to survive.
+
+Let's look at cabin letter more closely:
+```{r}
+fraction_yes = function(x) { sum(x == "Yes") / length(x) }
+g = train %>%
+  group_by(CabinLetter) %>%
+  summarize(percent_survival=fraction_yes(Survived)) %>%
+  ggplot(aes(CabinLetter, percent_survival)) +
+    geom_bar(stat = "identity") +
+    theme_bw()
+print(g)
+```
+
+Survival was poor for poorly documented passengers and passengers in A and T cabins (though there was only one passenger in "T", which is probably an error in my heuristic for extracting deck, so let's not consider it).
+
+# Logistic regression model
+
+Let's build a simple logistic regression model. We will include the effects of:
+* sex
+* undocumented cabin and cabin A
+* passenger class
+* Southhampton embarkation
+
+```{r}
+prepare_for_fit = function(df) {
+  train_logit = df
+  train_logit$CabinLetter = as.factor(gsub("^([A-Z]).*", "\\1", train_logit$Cabin))
+  train_logit$Pclass = as.factor(train_logit$Pclass)
+  train_logit$BadCabin = train_logit$CabinLetter == "" | train_logit$CabinLetter == "A"
+  train_logit$BadEmbarkation = train_logit$Embarked == "S"
+  train_logit$ThirdClass = train_logit$Pclass == "3"
+  train_logit
+}
+
+train_logit = prepare_for_fit(train)
+train.model = glm(Survived ~ Sex + BadCabin + BadEmbarkation, data=train_logit, family="binomial")
+print(summary(train.model))
+```
+
+We can ask naïvely how many of our passengers we classified correctly. (We need to partition our data-set into train and cross-validation segments to do this correctly...)
+
+```{r}
+sum((predict(train.model) > 0) == (train_logit$Survived == "Yes")) / length(train_logit$Survived)
+```
+
+Not great, but not bad, either.
+
+# Apply the logistic regression model to our test data set and save a CSV
+
+```{r}
+test = read.csv("test.csv")
+test_logit = prepare_for_fit(test)
+test$Survived = predict(train.model, test_logit) > 0
+output = data.frame(PassengerId=test$PassengerId, Survived=as.numeric(test$Survived))
+write.csv(output, "logistic_model.csv", row.names=FALSE)
+```
+
+# Result
+
+This scores 0.76077 which, as we expect, is a little worse than it performs on the training set. This is a significant improvement over the trivial solution where we predict no survivors, which scores 0.62679.
